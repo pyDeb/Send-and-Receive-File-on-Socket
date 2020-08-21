@@ -1,179 +1,210 @@
-#include<signal.h>
-#include<stdio.h>
-#include<sys/socket.h>
-#include<arpa/inet.h>
-#include<string.h>
-#include<sys/types.h>
-#include<stdlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <stdbool.h>
+#include <fcntl.h>
+#include <unistd.h>
 
+#define SIZE 1024
 
 #define BUFF_SIZE 1024
+
 
 
 bool inputValidation(char *input)
 {
 
-    if((input[0] == 'g' && input[1] == 'e' && input[2] == 't') || (input[0] == 'p' && input[1] == 'u' && input[2] == 't'))
+    if((strncmp(input, "get", 3) == 0) || (strncmp(input, "put", 3) == 0) || (strncmp(input, "quit", 4) == 0))
         return true;
-    
+
     return false;
-    
+
 }
 
 
 bool checkExistingFile(char *filename)
 {
-
+    if(access(filename, F_OK ) != -1 )
+        return true;
+    else
+        return false;
 }
 
 
-void putFile(char *filename, int sock)
-{
-    int fd;
-    char buff[BUFF_SIZE];
-    if((fd = open(filename, O_WRONLY | O_CREAT)) == -1)
-    {
-        perror("Error While Opening File: ");
-        return;
-    }
-    
+void putFile(int sockfd, char *filename){
+  int n;
+  FILE *fp;
+  //char *filename = "recv.txt";
+  char buffer[SIZE];
 
-    recv(sock,&buff, BUFF_SIZE - 1,0);
-    while(buff[0] != 0x4)
-    {
-        write(fd, buff, strlen(buff));
-        recv(sock,&buff, BUFF_SIZE - 1,0);
+  fp = fopen(filename, "wb+");
+  while (1) {
+    n = recv(sockfd, buffer, SIZE, 0);
+    if(buffer[0] == 0x4)
+        return;
+    
+    if(buffer[0] == 0x0)
+        return;
+    printf("RECEIVED: %s\n", buffer);
+    if (n <= 0){
+      break;
+      return;
     }
-     
+    fprintf(fp, "%s\n", buffer);
+    
+    bzero(buffer, SIZE);
+  }
+  fclose(fp);
+  return;
 }
 
 
-void getFile(char *filename, int sock)
-{
-    int fd;
-    char buff[BUFF_SIZE];
-    if((fd = open(filename, O_RDONLY)) == -1)
-    {
-        perror("Error While Opening File: ");
-        return;
-    }
-    
-    if(read(fd, buff, BUFF_SIZE) != BUFF_SIZE)
-    {
-        perror("Error While Reading File: ");
-        return;
-    }
+void getFile(FILE *fp, int sockfd){
+  int n;
+  char data[SIZE] = {0};
+  char end_of_file[2] = {0x4, 0x0};
 
-    while(buff[0] != 0x4)
-    {
-        if(send(sock, buff, strlen(buff), 0) != strlen(buff))
-        {
-            perror("Error While Writing on Socket: ");
-            return;
-        }
-
-        if(read(fd, buff, BUFF_SIZE) != BUFF_SIZE)
-    {
-        perror("Error While Reading File: ");
-        return;
+  while(fgets(data, SIZE, fp) != NULL) {
+      printf("SENT %s\n", data);
+    if (send(sockfd, data, sizeof(data), 0) == -1) {
+      perror("[-]Error in sending file.");
+      exit(1);
     }
-        
-    }
+    bzero(data, SIZE);
+  }
+    send(sockfd, end_of_file, 2, 0);
+    return;
+  
 }
 
 void clientServer(int sock)
 {
-    char how_to_use_msg[512], filename[512];
+    char how_to_use_msg[512], user_command[5], filename[512], comm_ok[2], goodbye_msg[128], file_found[2];
     char buff[BUFF_SIZE];
     memset(how_to_use_msg, '\0', 512);
     memset(filename, '\0', 512);
-    strcpy(how_to_use_msg, "Please enter 'get fileName', 'put fileName', or 'quit'\nAny other command will not be executed\n");
-    send(sock, how_to_use_msg, strlen(how_to_use_msg), 0);
+    comm_ok[0] = '\0';
+    comm_ok[1] = '\0';
+
+    file_found[0] = '\0';
+    file_found[1] = '\0';
+
+    struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&sock;
+    struct in_addr ipAddr = pV4Addr->sin_addr;
+    char clientAddString[INET_ADDRSTRLEN];
+    inet_ntop( AF_INET, &ipAddr, clientAddString, INET_ADDRSTRLEN );
+
+    printf("A new client[%s] is connected\n", clientAddString);
+    
 
     while(24)
     {
+        //read(sock, buff, 1);
         memset(buff, '\0', BUFF_SIZE);
-        recv(sock,&buf, BUFF_SIZE - 1,0);
-
-        if(strcmp(buf, "quit") == 0)
-        {
-            close(sock);
-            return;
-        }
-
-        // input validation
-        if(!inputValidation(buff))
-        {
-            send(sock, how_to_use_msg, strlen(how_to_use_msg), 0);
-            continue;
-        }
-
-        for(int i = 0; buff[i] , i++)
-            filename[i] = buff[i + 4];
+        read(sock, buff, BUFF_SIZE);
+        buff[strlen(buff)] = '\0';
+        // printf("HERE\n");
+        printf("buff content:|%s|\n",buff);
         
-        if(!checkExistingFile(filename))
+
+        if(!inputValidation(buff))
+            return;
+        
+        if((strncmp(buff, "quit", 4)) == 0 )
+            return;
+
+        
+        if((strncmp(buff, "put", 3)) == 0)
         {
-            char file_not_found_msg[256];
-            memset(file_not_found_msg, '\0', 256);
-            strcpy(file_not_found_msg, "The file you are looking for does not exist!\n");
-            send(sock, file_not_found_msg, strlen(file_not_found_msg), 0);
-            continue;
+            
+            char *filename = buff + 4;
+            putFile(sock, filename);            
         }
 
+        if((strncmp(buff, "get", 3)) == 0)
+        {
+            FILE *fp;
+            char *filename = buff + 4;
+            fp = fopen(filename, "r");
+            if (fp == NULL) {
+                perror("[-]Error in reading file.");
+                exit(1);
+            }       
 
+            getFile(fp, sock);
+            fclose(fp);
+            
+        }
     }
-    
-
-    printf("here 1\n");
-//    snprintf(buf, sizeof buf, "hi %d", counter);
-    send(sock, buf, strlen(buf), 0);
-    close(sock);
 }
+
+
 
 int main()
 {
+  int port = 1212;
+  int e;
 
-    struct sockaddr_in myaddr ,clientaddr;
-    int sockid, newsockid, len;
-    sockid = socket(AF_INET,SOCK_STREAM,0);
-    memset(&myaddr,'0',sizeof(myaddr));
-    myaddr.sin_family = AF_INET;
-    myaddr.sin_port = htons(54621);
-    myaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  int sockfd, new_sock;
+  struct sockaddr_in server_addr, clientaddr;
+  socklen_t addr_size;
+  char buffer[SIZE];
+  
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if(sockfd < 0) {
+    perror("[-]Error in socket");
+    exit(1);
+  }
+  printf("[+]Server socket created successfully.\n");
 
-    if(sockid == -1)
-        perror("Socket Error: ");
-    
-    len = sizeof(myaddr);
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(port);
+  server_addr.sin_addr.s_addr = INADDR_ANY;
 
-    if(bind(sockid,( struct sockaddr*)&myaddr,len)==-1)
-        perror("Error While Binding: ");
+  
+  e = bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+  if(e < 0) {
+    perror("[-]Error in bind");
+    exit(1);
+  }
+  printf("[+]Binding successfull.\n");
 
-    if(listen(sockid,10)==-1)
-        perror("Error While Listening: ");
-    
-    
+  if(listen(sockfd, 10) == 0){
+		printf("[+]Listening....\n");
+	}else{
+		perror("[-]Error in listening");
+    exit(1);
+	}
 
-    for(;;)
+
+  for(;;)
     {
-        int pid, new_sock;
-        new_sock = accept(sockid, (struct sockaddr *)&clientaddr, &len);
+        int pid, new_sock, clientlen;
+        clientlen = sizeof(clientaddr);
+        new_sock = accept(sockfd, (struct sockaddr *)&clientaddr, &clientlen);
 
         if ((pid = fork()) == -1)
         {
             close(new_sock);
             perror("Error While Creating Child Process: ");
-            continue;
+            exit(3);
         }
 
-        else if(pid > 0)
-            continue;
 
         else if(pid == 0)
+        {
+            close(sockfd);
             clientServer(new_sock);
-
+            exit(0);
+        }
     }
-    printf("here3");
-    close(sockid);
-    return 0;
+    close(new_sock);
+
+//   addr_size = sizeof(new_addr);
+//   new_sock = accept(sockfd, (struct sockaddr*)&new_addr, &addr_size);
+//   write_file(new_sock);
+//   printf("[+]Data written in the file successfully.\n");
+
+  return 0;
 }
